@@ -1,7 +1,7 @@
 # LockTrip MCP Server - AI Agent Integration Guide
 
-> **Version**: 3.0.0
-> **Last Updated**: 2026-02-04
+> **Version**: 4.0.0
+> **Last Updated**: 2026-02-06
 
 ---
 
@@ -30,8 +30,11 @@ LockTrip MCP Server exposes hotel booking capabilities to AI agents via the Mode
 |--------|-------------------|-------------|
 | Date format | `YYYY-MM-DD` (ISO) | `DD/MM/YYYY` |
 | Page numbers | 0-indexed (0, 1, 2...) | 1-based (1, 2, 3...) |
-| hotelId type | String | NUMBER |
-| Guest structure | `rooms[].guests[]` | `rooms[].adults[]` |
+| hotelId type | String (search) / Number (details) | Number |
+| Guest structure | `rooms[].guests[]` + `rooms[].children[]` | `rooms[].adults[]` + `rooms[].children[]` |
+| Guest titles | Optional (Mr, Mrs, Ms) | Required |
+| Search by | regionId OR lat/lng coordinates | regionId OR lat/lng coordinates |
+| Payment | B2B credit line OR Stripe | B2B credit line, Stripe, Revolut |
 | Completion check | `searchStatus === 'COMPLETED'` | `isResultCompleted` |
 | Use case | AI agents, MCP clients | Direct backend integration |
 
@@ -71,7 +74,7 @@ https://locktrip.com
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/mcp/health` | GET | No | Health check |
-| `/mcp/tools` | GET | No | List all 10 available tools |
+| `/mcp/tools` | GET | No | List all 12 available tools |
 | `/mcp/sse` | GET | Optional | SSE stream for MCP clients |
 | `/mcp/rpc` | POST | Optional | JSON-RPC 2.0 endpoint |
 | `/mcp/tools/:name` | POST | Optional | Direct REST-style tool call |
@@ -301,9 +304,9 @@ Find the regionId for your destination. **Never hardcode regionId.**
 
 ### 4.2 hotel_search
 
-Initiate async hotel search. Returns immediately.
+Initiate async hotel search. Returns immediately. Supports two modes: **region-based** (using regionId from search_location) or **coordinate-based** (using latitude/longitude).
 
-**Input:**
+**Input (Region-based):**
 ```json
 {
   "regionId": "645f64dace586e4a12d943ed",
@@ -314,6 +317,29 @@ Initiate async hotel search. Returns immediately.
   "nationality": "US"
 }
 ```
+
+**Input (Coordinate-based):**
+```json
+{
+  "latitude": 48.2082,
+  "longitude": 16.3738,
+  "radiusInMeters": 5000,
+  "startDate": "2026-08-23",
+  "endDate": "2026-08-25",
+  "rooms": [{ "adults": 2, "childrenAges": [] }],
+  "currency": "EUR",
+  "nationality": "US"
+}
+```
+
+**Coordinate Search Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `latitude` | number | Yes (if no regionId) | -90 to 90 |
+| `longitude` | number | Yes (if no regionId) | -180 to 180 |
+| `radiusInMeters` | number | No | Search radius (default: 30000, min: 1000, max: 100000) |
+
+**Note:** Either `regionId` OR `latitude`+`longitude` must be provided. Not both required.
 
 **Sample Response:**
 ```json
@@ -592,20 +618,28 @@ Create booking with guest details. **Does not charge.**
   "rooms": [{
     "roomIndex": 0,
     "guests": [
-      { "firstName": "John", "lastName": "Smith", "isLeadGuest": true },
-      { "firstName": "Jane", "lastName": "Smith" }
+      { "firstName": "John", "lastName": "Smith", "title": "Mr", "isLeadGuest": true },
+      { "firstName": "Jane", "lastName": "Smith", "title": "Mrs" }
+    ],
+    "children": [
+      { "firstName": "Billy", "lastName": "Smith", "age": 8 }
     ]
   }],
   "contactPerson": {
     "firstName": "John",
     "lastName": "Smith",
     "email": "john.smith@company.com",
-    "phone": "+14155551234"
+    "phone": "+14155551234",
+    "title": "Mr"
   }
 }
 ```
 
-**CRITICAL:** Guest count must match search exactly.
+**Guest Title:** Optional `title` field for adults and contact person. Values: `Mr`, `Mrs`, `Ms`. Defaults to `Mr`.
+
+**Children:** Optional `children` array per room with `firstName`, `lastName`, and `age` (0-17). Children must match the `childrenAges` used in the original search.
+
+**CRITICAL:** Adult guest count must match search exactly.
 
 **Sample Response:**
 ```json
@@ -651,9 +685,12 @@ Confirm and pay via credit line. **This charges your account.**
 ```json
 {
   "accepted": true,
-  "message": null
+  "message": null,
+  "voucherUrl": "https://locktrip.com/booking/hotel/voucher/698341601f3796feeed6a790"
 }
 ```
+
+**Note:** `voucherUrl` is only returned when `accepted` is `true`. Use this URL to view/share the booking voucher.
 
 **Sample Response (Failure):**
 ```json
@@ -794,6 +831,90 @@ Confirm and pay via credit line. **This charges your account.**
 
 ---
 
+### 5.4 get_hotel_details
+
+Get detailed hotel information including description, amenities, reviews, and photos.
+
+**Input:**
+```json
+{
+  "hotelId": 17006858,
+  "language": "en",
+  "includeImages": true,
+  "imageLimit": 20
+}
+```
+
+**Note:** `hotelId` is a **number** (from search results `externalId`), not a string.
+
+**Sample Response:**
+```json
+{
+  "hotel": {
+    "id": 17006858,
+    "name": "Rosewood Vienna",
+    "country": "Austria",
+    "city": "Vienna",
+    "star": 5,
+    "address": "Petersplatz 7, Innere Stadt, 1010 Vienna, Austria",
+    "latitude": 48.2088,
+    "longitude": 16.3706,
+    "description": "Housed in a historically significant building...",
+    "phone": "+43 1 9012345",
+    "countryCode": "AT",
+    "hotelPhotos": [
+      { "url": "https://imagecontent.net/images/full/hotel-17006858.jpeg" }
+    ],
+    "reviews": {
+      "scoreSummary": "Exceptional",
+      "commentSummary": "Guests love the central location...",
+      "reviewsCount": 523,
+      "keyWords": [
+        { "name": "Location", "reviewsCount": 412, "score": 9.6, "comments": ["Perfect location"] }
+      ]
+    },
+    "hotelAmenities": [
+      {
+        "hotelId": 17006858,
+        "categoryName": "General",
+        "features": [{ "_id": "wifi", "name": "Free WiFi" }]
+      }
+    ]
+  },
+  "additionalImages": [
+    { "url": "https://imagecontent.net/images/full/extra1.jpeg" }
+  ]
+}
+```
+
+---
+
+### 5.5 get_payment_url
+
+Get a Stripe checkout URL for paying a prepared booking via credit card (alternative to B2B credit line).
+
+**Input:**
+```json
+{
+  "bookingId": "698341601f3796feeed6a790",
+  "currency": "EUR",
+  "backUrl": "https://yourapp.com/booking/cancelled",
+  "successUrl": "https://yourapp.com/booking/success"
+}
+```
+
+**Sample Response:**
+```json
+{
+  "url": "https://checkout.stripe.com/c/pay/cs_live_...",
+  "sessionId": "cs_live_a1b2c3d4..."
+}
+```
+
+**Note:** Redirect the customer to `url` to complete payment. The `backUrl` is where they go if they cancel. `successUrl` is optional (defaults to LockTrip confirmation page).
+
+---
+
 ## 6. Search Results & Filtering
 
 ### Recommended Approach
@@ -919,28 +1040,39 @@ Guest count must exactly match search:
 ## Quick Reference
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       MCP API QUICK REFERENCE                        │
-├─────────────────────────────────────────────────────────────────────┤
-│ Date format:        YYYY-MM-DD (ISO)                                │
-│ Page numbers:       0-indexed (0, 1, 2...)                          │
-│ Completion check:   searchStatus === 'COMPLETED'                    │
-│ hotelId type:       STRING                                          │
-│ packageId:          quoteId.split('_')[0]                           │
-│ Guest structure:    rooms[].guests[] with firstName, lastName       │
-│ Guest count:        Must match search exactly                       │
-│ First poll wait:    2+ seconds mandatory                            │
-│ Total search time:  15-30 seconds typical                           │
-│ Session lifetime:   ~30 minutes                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│ BOOK: search_location → hotel_search → WAIT 2s → get_search_results │
-│       → get_hotel_rooms → check_cancellation_policy →               │
-│       prepare_booking → confirm_booking                              │
-│                                                                      │
-│ MANAGE: list_bookings → get_booking_details → cancel_booking        │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       MCP API QUICK REFERENCE                         │
+├──────────────────────────────────────────────────────────────────────┤
+│ Date format:        YYYY-MM-DD (ISO)                                  │
+│ Page numbers:       0-indexed (0, 1, 2...)                            │
+│ Completion check:   searchStatus === 'COMPLETED'                      │
+│ hotelId type:       STRING (search) / NUMBER (get_hotel_details)      │
+│ packageId:          quoteId.split('_')[0]                             │
+│ Guest structure:    rooms[].guests[] with firstName, lastName, title  │
+│ Children:           rooms[].children[] with firstName, lastName, age  │
+│ Guest titles:       Mr, Mrs, Ms (optional, defaults to Mr)           │
+│ Guest count:        Must match search exactly                         │
+│ First poll wait:    2+ seconds mandatory                              │
+│ Total search time:  15-30 seconds typical                             │
+│ Session lifetime:   ~30 minutes                                       │
+├──────────────────────────────────────────────────────────────────────┤
+│ SEARCH: search_location OR coordinates (lat/lng)                      │
+│                                                                        │
+│ BOOK:  hotel_search → WAIT 2s → get_search_results                    │
+│        → get_hotel_details (optional) → get_hotel_rooms               │
+│        → check_cancellation_policy → prepare_booking                  │
+│        → confirm_booking (credit line) OR get_payment_url (Stripe)    │
+│                                                                        │
+│ MANAGE: list_bookings → get_booking_details → cancel_booking          │
+│                                                                        │
+│ TOOLS (12): search_location, hotel_search, get_search_results,        │
+│             get_hotel_rooms, check_cancellation_policy,                │
+│             prepare_booking, confirm_booking, list_bookings,           │
+│             get_booking_details, cancel_booking,                       │
+│             get_hotel_details, get_payment_url                         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-*Document version 3.0 - Complete AI agent integration guide with sample responses*
+*Document version 4.0 - Updated with coordinate search, hotel details, guest titles/children, Stripe payment, and voucher URLs*

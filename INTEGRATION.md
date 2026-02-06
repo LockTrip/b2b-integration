@@ -1,7 +1,7 @@
 # LockTrip GraphQL API - B2B Integration Guide
 
-> **Version**: 2.1.0
-> **Last Updated**: 2026-02-04
+> **Version**: 2.2.0
+> **Last Updated**: 2026-02-06
 
 ---
 
@@ -257,7 +257,7 @@ mutation HotelSearch($searchHotelsInput: searchHotelsInput!, $isAsyncSearch: Boo
 }
 ```
 
-**Variables:**
+**Variables (Region-based):**
 ```json
 {
   "searchHotelsInput": {
@@ -272,6 +272,35 @@ mutation HotelSearch($searchHotelsInput: searchHotelsInput!, $isAsyncSearch: Boo
   "isAsyncSearch": true
 }
 ```
+
+**Variables (Coordinate-based):**
+```json
+{
+  "searchHotelsInput": {
+    "latitude": 48.2082,
+    "longitude": 16.3738,
+    "radiusInMeters": 5000,
+    "startDate": "23/08/2026",
+    "endDate": "25/08/2026",
+    "currency": "EUR",
+    "rooms": [{ "adults": 2, "children": [] }],
+    "uuid": "unique-search-id-123",
+    "nat": "US"
+  },
+  "isAsyncSearch": true
+}
+```
+
+**Coordinate Search Parameters:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `regionId` | String | No (if lat/lng provided) | Location ID from search |
+| `latitude` | Float | No (if regionId provided) | Latitude (-90 to 90) |
+| `longitude` | Float | No (if regionId provided) | Longitude (-180 to 180) |
+| `radiusInMeters` | Int | No | Search radius (default: 30000, min: 1000, max: 100000) |
+
+**Note:** Either `regionId` OR `latitude`+`longitude` must be provided.
 
 **Sample Response:**
 ```json
